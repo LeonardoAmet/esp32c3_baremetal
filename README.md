@@ -1,315 +1,190 @@
-# ESP32-C3 Bare-Metal (Sin ESP-IDF / Sin FreeRTOS)
+ESP32-C3 Bare-Metal – Potenciómetro → LED (GPIO/ADC)
 
-> Sección nueva: Punto de partida para alumnos
+Proyecto didáctico bare-metal (sin ESP-IDF) para ESP32-C3 DevKit.
+Objetivo: al girar un potenciómetro, si supera un umbral, encender LED en GPIO3.
+Dos modos conmutables por macro: digital (GPIO1) y ADC (ADC1_CH1 en GPIO1).
 
-## Inicio Rápido para Alumnos
+🧩 Estructura
+.
+├─ Makefile
+├─ linker.ld
+├─ include/
+│  └─ WDT_FEED_DEFINES.h    # tus rutinas para deshabilitar WDTs (TIMG/RTC)
+└─ src/
+   ├─ startup.S              # arranque mínimo: stack, .bss, .data, salto a main
+   └─ main.c                 # lógica: modo digital/ADC seleccionable por macro
 
-1. Verifica toolchain: `riscv32-esp-elf-gcc --version` y `esptool.py --version`.
-2. Compila: `make`
-3. Flashea (ajusta puerto si es necesario): `make flash` o `./flash.sh /dev/ttyUSB0 460800`
-4. Conecta un LED (GPIO4 -> Resistencia 220Ω -> Anodo LED -> Cátodo a GND).
-5. Abre la guía de ejercicios: ver archivo `GUIA_DE_EJERCICIOS.md` en la raíz.
-6. Explora skeletons en carpeta `ejercicios/`.
+🛠️ Requisitos
 
-Orden sugerido de aprendizaje:
-GPIO básico → medición con mcycle → UART → timers → interrupciones → refactor modular.
+Toolchain: riscv32-esp-elf-gcc (Espressif).
 
-En caso de dudas sobre memoria, revisar secciones 4 y 6 de este README.
+esptool.py en PATH.
 
+DevKit ESP32-C3 con bootloader + tabla de particiones en 0x0.
 
-Proyecto pedagógico ultra minimal para **Sistemas Digitales II**. Objetivo: mostrar el flujo completo de arranque, memoria y control de GPIO sin usar el framework ESP-IDF ni FreeRTOS.
+⚙️ Compilar y flashear
+make           # compila y enlaza (genera .elf, .map, .dis)
+make flash     # empaqueta y flashea la app en 0x10000
+make clean
 
----
 
-## 1. ¿Qué hace este proyecto?
+El flash asume bootloader/partitions vigentes en 0x0 (típico DevKit).
+Si no arranca, reflasheá bootloader/partitions con ESP-IDF y volvé a make flash.
 
-Parpadea un pin GPIO (ahora configurado en el código como GPIO4; originalmente ejemplo usaba GPIO2) usando:
+🔌 Conexiones
 
-- Startup propio (`startup.S`)
-- Linker script manual (`linker.ld`)
-- Código C mínimo (`main.c`)
-- Acceso directo a registros (TRM ESP32-C3)
+LED: en GPIO3 (salida).
 
-No hay scheduler, no hay drivers, no hay librerías estándar (no `printf`, no `malloc`).
+Potenciómetro 10 k:
 
----
+Un extremo a 3V3.
 
-## 2. Estructura de Archivos
+El otro a GND.
 
-```text
-esp32c3_raw_bare/
-├── linker.ld          # Script de link: define memoria, secciones y símbolos
-├── Makefile           # Compilación con 'make'
-├── build.sh           # Script alternativo de build paso a paso
-├── flash.sh           # Flasheo rápido de la imagen generada
-├── src/
-│   ├── startup.S      # Código de arranque (reset vector)
-│   └── main.c         # Lógica de blink
-└── include/           # (vacío por ahora, para futuras cabeceras propias)
-```
+Wiper a GPIO1 (modo por defecto).
+(Si probás GPIO0 en algún experimento, ajustá el código; el README asume GPIO1).
 
----
+🧭 Modos de operación (macro)
 
-## 3. Flujo de Arranque (Resumen)
+Abrí src/main.c y tocá sólo esta macro:
 
-1. Chip resetea → Boot ROM (enmascarada) inicializa lo básico y carga la imagen de flash (si existe bootloader, lo ejecuta; aquí asumimos bootloader estándar ya flasheado anteriormente por ESP-IDF o fábrica).
-2. Se mapea el binario de la app a partir de 0x42000000 (flash mapeada XIP).
-3. Nuestro `_start` (en `startup.S`):
-   - Configura el stack pointer (`sp`).
-   - Limpia `.bss` (variables globales no inicializadas → cero).
-   - Copia `.data` desde flash (después de `.text`) a RAM.
-   - Llama a `main`.
-   - Si `main` retorna, entra a un bucle infinito.
+#define MODE_ADC  0   // 0 = Modo DIGITAL (recomendado en tu placa)
+                      // 1 = Modo ADC (didáctico: ADC1_CH1 en GPIO1)
 
----
+Modo DIGITAL (recomendado hoy)
 
-## 4. Linker Script Clave (`linker.ld`) y Mapa de Memoria
+Usa GPIO1 como entrada digital (Schmitt trigger).
 
-Se definen dos regiones de memoria principales (simplificadas para docencia):
+Filtro de ventana 64 muestras + histéresis:
 
-```ld
-MEMORY {
-  IROM (rx)  : ORIGIN = 0x42000000, LENGTH = 2M
-  DRAM (rwx) : ORIGIN = 0x3FC80000, LENGTH = 400K
-}
-```
+#define DIG_TH_ON   48   // pasa a 1 si >=48/64 altas  (~75%)
+#define DIG_TH_OFF  16   // vuelve a 0 si <=16/64      (~25%)
 
-Se crean símbolos pedagógicos:
 
-- `_stext` / `_etext`: delimitan código y rodata.
-- `_sdata` / `_edata`: datos inicializados (RAM).
-- `_sbss` / `_ebss`: datos a cero.
-- `_stack_top`: tope de la pila.
+Resultado: al cruzar “la mitad” del pote, el LED en GPIO3 se enciende estable.
 
-`startup.S` usa estos símbolos para inicializar memoria.
+Modo ADC (didáctico)
 
-### 4.1 Mapa de Memoria (Resumen Pedagógico)
+Usa ADC1_CH1 → GPIO1, one-shot con atenuación alta (~3.3 V).
 
-| Región | Dirección Inicio | Tamaño aprox | Contenido | Notas |
-|--------|------------------|--------------|-----------|-------|
-| Boot ROM (enmascarada) | 0x0000_0000 | (fija) | Código ROM Espressif | No modificable; ejecuta bootloader interno / carga app |
-| Flash SPI externa | (física) | Según módulo | Contiene bootloader, particiones, app, datos | Mapeada parcialmente vía caché XIP |
-| Flash mapeada XIP | 0x4200_0000 | Ventana de 2 MB usada aquí | Código (.text) + .rodata ejecutables | Nuestra app se ejecuta directamente desde aquí |
-| DRAM principal | 0x3FC8_0000 | ~400 KB (simplificado) | .data, .bss, stack, (heap) | Acceso de lectura/escritura rápido |
-| Registros Periféricos (ej. GPIO) | 0x6000_0000+ | Espaciado por bloques | Control hardware | Acceso por direcciones fijas |
+Umbral en cuentas:
 
-Direcciones clave empleadas:
+#define ADC_UMBRAL  1900   // 0..4095
 
-- Base GPIO: 0x6000_4000 (bloque de control de pines generales)
-- Ventana flash XIP usada: 0x4200_0000 (donde el enlazador coloca .text)
-- Inicio DRAM: 0x3FC8_0000 (donde ubicamos datos y stack)
 
-### 4.2 Flujo de Colocación
+En tu DevKit el camino analógico no arrojó lecturas válidas durante el práctico; se deja este modo para reusar en otro C3 donde ADC1_CH1 esté expuesto.
 
-1. El enlazador coloca `.text` y `.rodata` en la región IROM (FLASH mapeada).
-2. Ubica `.data` en DRAM pero especifica su Load Memory Address (LMA) justo a continuación de `.text` en FLASH.
-3. `.bss` se reserva en DRAM sin ocupar espacio en el binario (NOLOAD) y se limpia a cero.
-4. `_stack_top` marca el final de la región DRAM como tope de la pila (simplificación).
+⏱️ Calibración de tiempos
 
-### 4.3 OFFSETS Bootloader (Contexto)
+Los delays son busy-wait (NOPs): calibrá una sola vez con:
 
-El ejemplo asume que ya existe un bootloader estándar (cargado previamente) que:
+#define CALIB_K  5000u   // más grande = más lento
 
-- Vive en flash en offset 0x0.
-- Carga nuestra imagen de aplicación ubicada comúnmente a partir de 0x10000 dentro de la flash física.
-- Nuestra imagen se mapea en la ventana 0x4200_0000 para ejecución.
 
-Para un escenario totalmente bare-metal sin bootloader preexistente habría que:
+Regla práctica: los 3 blinks iniciales deberían durar ~1 s total.
+Si ves que tardan mucho, bajá CALIB_K; si van muy rápido, subí CALIB_K.
 
-1. Crear un boot mínimo en 0x0 que configure caché/mapeo.
-2. O reubicar el código para arrancar directamente sin las facilidades del bootloader (más complejo y fuera del alcance inmediato del curso inicial).
+🧪 Cómo probar rápido
 
----
+Conectá el pote (GND/3V3 wiper→GPIO1).
 
-## 5. Startup (`startup.S`)
+Dejá MODE_ADC 0 (digital).
 
-Pseudocódigo:
+make flash. Mirá 3 blinks de vida (calibrá CALIB_K si hace falta).
 
-```text
-sp = _stack_top
-memset(.bss, 0)
-copy(flash: después de .text → RAM .data)
-call main()
-loop para siempre
-```
+Girá el pote: al pasar por la zona media, el LED en GPIO3 debe encender.
 
-No configuramos interrupciones todavía; se puede extender agregando vector table y habilitando mtvec.
+¿Querés que prenda “más tarde”? Subí DIG_TH_ON (y quizá DIG_TH_OFF para mantener histéresis).
 
----
+¿Demasiado sensible? Bajá un poco DIG_TH_ON y ajustá DIG_TH_OFF.
 
-## 6. Blink (`main.c`) y Registros GPIO
+(Opcional) Probá MODE_ADC 1: si tu placa expone ADC1_CH1 a GPIO1, al superar ADC_UMBRAL el LED encenderá.
 
-El parpadeo se implementa alternando un bit en los registros de salida. En la versión actual se usa `GPIO4` (define `LED_GPIO` en el código). Antes se mostró `GPIO2` solo como ejemplo.
+🧯 Watchdogs
 
-### 6.1 Base de GPIO
+Se deshabilitan TIMG0/TIMG1 WDT y RTC_CNTL WDT/SWD en WDT_FEED_DEFINES.h para evitar resets durante loops de prueba.
+Registros tocados (resumen):
 
-- Base de registros GPIO empleada: `0x6000_4000`
+TIMGx: WDTWPROTECT, WDTCONFIG0..5, WDTFEED.
 
-### 6.2 Registros usados (offset respecto a base)
+RTC_CNTL: WDTCONFIG0..4, WDTFEED, WDTWPROTECT, SWD_CONF, SWD_WPROTECT.
 
-| Registro | Offset | Acción al escribir | Propósito |
-|----------|--------|--------------------|-----------|
-| GPIO_OUT_W1TS_REG | 0x0008 | Bits en 1 -> pone esos pines a nivel ALTO | Encender LED (set) |
-| GPIO_OUT_W1TC_REG | 0x000C | Bits en 1 -> pone esos pines a nivel BAJO | Apagar LED (clear) |
-| GPIO_ENABLE_W1TS_REG | 0x0024 | Bits en 1 -> habilita dirección de salida | Configurar pin como salida |
+🧵 GPIO / IO_MUX / ADC (registros clave)
 
-No se usa lectura: las operaciones W1TS/W1TC se diseñan para no afectar otros pines (evitan read-modify-write).
+GPIO base 0x60004000
 
-### 6.3 Secuencia del bucle principal
+GPIO_OUT_W1TS_REG / ...W1TC_REG: set/clear salida.
 
-1. Habilitar el pin como salida: escribir `LED_MASK` en `GPIO_ENABLE_W1TS_REG`.
-2. Escribir `LED_MASK` en `GPIO_OUT_W1TS_REG` → LED ON.
-3. Delay (busy-wait) con NOPs.
-4. Escribir `LED_MASK` en `GPIO_OUT_W1TC_REG` → LED OFF.
-5. Repetir.
+GPIO_ENABLE_W1TS_REG / ...W1TC_REG: habilitar OE.
 
-### 6.4 Observaciones de Tiempo
+GPIO_IN_REG: leer entradas.
 
-El delay basado en NOPs no es exacto y depende de la frecuencia de CPU (160 MHz típica). Para un control más preciso se propondrá uso de SYSTIMER o un timer de hardware en extensiones futuras.
+IO_MUX base 0x60009000
 
----
+IO_MUX_GPIOn_REG(n) = BASE + 0x0004*(n+1)
 
-## 7. Compilación
+Bits: FUN_WPD(7), FUN_WPU(8), FUN_IE(9), MCU_SEL[14:12].
 
-### Opción A (Makefile)
+Digital: IE=1, sin pulls; Analógico: IE=0, sin pulls, OE=0.
 
-```bash
-make
-```
+SYSTEM 0x600C0000
 
-Genera en `build/`:
+PERIP_CLK_EN0: bit28 APB_SARADC_CLK_EN.
 
-- `app.elf`
-- `app.bin`
-- `app.map`
-- `app.dis` (desensamblado)
-- `image` (salida de `esptool.py elf2image` con el prefijo usado)
+PERIP_RST_EN0: bit28 APB_SARADC_RST.
 
-### Opción B (Script paso a paso)
+APB_SARADC 0x60040000
 
-```bash
-./build.sh
-```
+CTRL (0x0000): START_FORCE, START, SAR_CLK_GATED, SAR_CLK_DIV.
 
-> Requiere tener `riscv32-esp-elf-gcc` en el PATH (se activa con `source $HOME/esp/esp-idf/export.sh` o agregando manualmente el path de toolchain).
+ONETIME_SAMPLE_REG (0x0020): ADC1_ONETIME_SAMPLE, CHANNEL[24:22] (CH1), ATTEN[25:24], ONETIME_START.
 
----
+ADC1_DATA_STATUS_REG (0x002C): 12 bits de dato.
 
-## 8. Flasheo
+🔗 Startup y Linker (resumen)
 
-Flashear solo la app (asumiendo bootloader ya existe):
+startup.S
 
-```bash
-./flash.sh /dev/ttyACM0 460800
-```
+Setea SP con _stack_top.
 
-O manual:
+Limpia .bss (_sbss.._ebss).
 
-```bash
-esptool.py --chip esp32c3 write_flash 0x10000 build/image
-```
+Copia .data desde _sidata (FLASH) a _sdata.._edata (DRAM).
 
-Si prefieres un nombre distinto o asegurar formato legacy, puedes usar:
+call main y lazo infinito si retorna.
 
-```bash
-esptool.py --chip esp32c3 elf2image build/app.elf --version 2 --output build/app_v2
-esptool.py --chip esp32c3 write_flash 0x10000 build/app_v2
-```
+linker.ld
 
-Importante: Esto asume que ya existe en flash (offset 0x0) un bootloader y tabla de particiones estándar. Si la placa nunca fue flasheada con ESP-IDF, primero crea y flashea un proyecto trivial (hello_world) con `idf.py flash` para instalar bootloader/partitions. Alternativa más avanzada (no cubierta todavía): crear un bootloader bare-metal y mapear tu código a 0x0.
+IROM (0x4200_0000) → .text
 
-Si no tienes bootloader, puedes primero flashear uno desde un proyecto ESP-IDF y luego usar este flujo.
+DROM (0x3C00_0000) → .rodata
 
----
+DRAM (0x3FC8_0000) → .data, .bss, stack
 
-## 9. Monitor Serie
+PROVIDE(_sidata = LOADADDR(.data)), PROVIDE(_stack_top = ORIGIN(DRAM)+LENGTH(DRAM))
 
-Este proyecto no incluye UART init ni `printf`.
+Cuidar no solapar LMA entre .rodata y .data.
 
-Si deseas salida serial bare-metal:
+🧰 Troubleshooting
 
-1. Implementar init de UART0 (configurar baud, pins).  
-2. Escribir en el FIFO TX registrando bits de estado.  
-3. Reemplazar `delay()` por toggling + envío de caracteres.  
+Se queda “en bootloader” o abort: revisá startup.S y linker.ld (símbolos _stack_top, _sidata, .data AT de .rodata).
 
-(Se deja como ejercicio avanzado.)
+Guru Meditation / abort(): típico de secciones mal ubicadas o acceso fuera de rango; validá con objdump -h/-t.
 
----
+LED no enciende:
 
-## 10. Extensiones Sugeridas para Estudiantes
+Probá blink de vida justo antes del loop para aislar si GPIO3 está bien.
 
-| Tema | Ejercicio | Dificultad |
-|------|-----------|------------|
-| UART | Implementar `uart_putc` y enviar "Hello" | ★★ |
-| Timer | Usar SYSTIMER para delays precisos | ★★ |
-| Interrupciones | Crear vector mtvec y handler dummy | ★★★ |
-| Assembly | Reescribir delay en ensamblador optimizado | ★ |
-| GPIO input | Leer botón y cambiar patrón de blink | ★ |
-| PWM básico | Software PWM con busy loop | ★★ |
-| Medición cycles | Leer CSR `mcycle` y calcular periodo | ★★ |
+En modo digital, leé GPIO_IN_REG (bit de GPIO1) y ajustá DIG_TH_*.
 
----
+Blinks lentísimos: calibrá CALIB_K (bajalo).
 
-## 11. Depuración (Opcional JTAG / USB-JTAG)
+Modo ADC no responde: no insistas—en tu DevKit el camino analógico no está expuesto en GPIO1; quedate con el modo digital.
 
-Con OpenOCD (si instalado):
+📌 Notas finales
 
-```bash
-openocd -f board/esp32c3-builtin.cfg
-```
+El modo digital cumple el enunciado “umbral → LED” y quedó estable.
 
-Luego:
+El modo ADC se deja para reuso en otra placa C3 (mismo main.c, solo cambiás MODE_ADC a 1).
 
-```bash
-riscv32-esp-elf-gdb build/app.elf
-(gdb) target remote :3333
-(gdb) monitor reset halt
-(gdb) load
-(gdb) continue
-```
-
----
-
-## 12. Validación Didáctica
-
-Checklist para alumnos:
-
-- ¿Pueden explicar la diferencia entre LMA y VMA en `.data`?
-- ¿Identifican en `app.map` dónde quedó cada sección?
-- ¿Pueden mostrar en `app.dis` la instrucción que alterna el bit del GPIO?
-- ¿Pueden estimar el retardo real midiendo con analizador lógico?
-
----
-
-## 13. Limitaciones
-
-- Sin WiFi/BLE (stacks requieren entorno del SDK).
-- Sin seguridad/crypto de alto nivel.
-- Sin memoria dinámica (se puede agregar un heap simple si se requiere).
-
----
-
-## 14. Próximos Pasos Propuestos
-
-1. Añadir `uart.c` para tener un `putc` y un `puts` simples.
-2. Implementar vector de interrupciones y habilitar una interrupción de timer.
-3. Crear un mini "driver" de delay basado en SYSTIMER en lugar de busy-wait.
-4. Medir jitter del parpadeo vs versión con FreeRTOS.
-
----
-
-## 15. Referencias
-
-- ESP32-C3 Technical Reference Manual (TRM)
-- RISC-V Privileged Spec (para comprender CSR y mtvec)
-- Espressif esptool.py docs
-
----
-
-## 16. Licencia y Uso
-
-Material educativo. Puedes adaptar libremente para tu curso.
-
----
-
-¡Listo para enseñar bare-metal real! Extiende paso a paso sin saltar directo a complejidad.
+Este repo es ideal para entender ABI mínima, startup/linker, mapeo de registros, y GPIO/IO_MUX/ADC sin ESP-IDF.
