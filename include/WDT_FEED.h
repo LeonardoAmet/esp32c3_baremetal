@@ -1,9 +1,9 @@
 /*
- * WDT_FEED_DEFINES.h — Pequeño helper header-only para el WDT del ESP32-C3.
+ * WDT_FEED.h — Pequeño helper header-only para el WDT del ESP32-C3.
  */
 
-#ifndef WDT_FEED_DEFINES
-#define WDT_FEED_DEFINES
+#ifndef WDT_FEED
+#define WDT_FEED
 
 #include <stdint.h>
 
@@ -106,4 +106,4 @@ static void disable_rtc_wdts(void) {
     *swd_conf |= (1U << 30);      /* Deshabilitar super WDT */
     *swd_protect = 0;
 }
-#endif /* WDT_FEED_DEFINES */
+#endif /* WDT_FEED */

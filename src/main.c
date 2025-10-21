@@ -18,7 +18,7 @@
 
 // ======= BASES / REGISTROS =======
 #include <stdint.h>
-#include "WDT_FEED_DEFINES.h"
+#include "WDT_FEED.h"
 
 #define DR_REG_GPIO_BASE          0x60004000UL
 #define DR_REG_IO_MUX_BASE        0x60009000UL
