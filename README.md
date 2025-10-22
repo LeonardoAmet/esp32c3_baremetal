@@ -138,9 +138,4 @@ make clean
 
 ## 📝 Nota didáctica (qué nos trababa antes)
 
-El SAR del C3 **no convierte** si el bloque analógico no está **encendido** (**`XPD_SAR_FORCE`**) y si no recibe un **flanco de START** válido. Además, la **ruta de dato** puede ser **0x2C** (no 0x30) según revisión. Al **clonar** exactamente el esquema de **CTRL/ONETIME/INTS** que usa el driver del IDF, el bare-metal queda **estable y determinista**.
-
----
-
-¡Listo! Con esto tenés un punto de partida claro, reproducible y fácil de explicar en tu presentación.
-
+El SAR del C3 **no convierte** si el bloque analógico no está **encendido** (**`XPD_SAR_FORCE`**) y si no recibe un **flanco de START** válido. Además, la **ruta de dato** puede ser **0x2C** (no 0x30) según revisión. Al **clonar** exactamente el esquema de **CTRL/ONETIME/INTS** que usa el driver del IDF, el bare-metal queda **estable y funcional**.
