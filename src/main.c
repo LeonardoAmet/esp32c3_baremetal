@@ -93,18 +93,21 @@
 
 #define LEDC_LS_SIG_OUT0_IDX    45U  // Señal PWM canal 0 (low-speed)
 
-#define LED_GPIO        3U
-#define LED2_GPIO       5U
-#define POT_GPIO        0U
-#define LED_MASK        BIT(LED_GPIO)
-#define LED2_MASK       BIT(LED2_GPIO)
-#define POT_MASK        BIT(POT_GPIO)
+#define FAN_PWM_GPIO       3U
+#define STATUS_LED_GPIO    5U
+#define POT_GPIO           0U
+#define FAN_PWM_MASK       BIT(FAN_PWM_GPIO)
+#define STATUS_LED_MASK    BIT(STATUS_LED_GPIO)
+#define POT_MASK           BIT(POT_GPIO)
 
-#define ADC_ATTEN_11DB  3U
-#define ADC_THRESHOLD   2000U
-#define LOOP_DELAY      5000U
+#define ADC_ATTEN_11DB     3U
+#define ADC_MAX_VALUE      4095U
+#define LOOP_DELAY         5000U
 
-#define ADC_ZERO_BIAS   1650U   // Cuentas residuales con cursor a GND (ajustar según hardware)
+#define ADC_ZERO_BIAS      40U    // Ajustar según la lectura mínima del potenciómetro
+#define FAN_HYST_ON        120U   // Cuentas ADC para pasar de IDLE a RUN
+#define FAN_HYST_OFF       80U    // Cuentas ADC para volver a IDLE
+#define FAN_MIN_DUTY_PC    15U    // Duty mínimo (%) para vencer la inercia del cooler
 
 #define LEDC_PWM_FREQ_HZ       2000ULL
 #define LEDC_TIMER_RES_BITS    10U
@@ -115,12 +118,20 @@
 #define LEDC_TIMER_DIVIDER ((uint32_t)(LEDC_TIMER_DIVIDER_NUM / LEDC_TIMER_DIVIDER_DEN))
 #define LEDC_DUTY_MAX        ((1U << LEDC_TIMER_RES_BITS) - 1U)
 #define LEDC_DUTY_SHIFT      4U
+#define FAN_MIN_DUTY        ((LEDC_DUTY_MAX * FAN_MIN_DUTY_PC) / 100U)
 
 #if ((LEDC_TIMER_DIVIDER_NUM / LEDC_TIMER_DIVIDER_DEN) == 0) || ((LEDC_TIMER_DIVIDER_NUM / LEDC_TIMER_DIVIDER_DEN) > 0x3FFFFU)
 #error "LEDC_TIMER_DIVIDER fuera de rango para el campo de 18 bits"
 #endif
 
+typedef enum {
+    FAN_STATE_IDLE = 0,
+    FAN_STATE_MANUAL
+} fan_state_t;
+
 static void ledc_set_duty(uint32_t duty);
+static void status_led_set(int on);
+static void fan_control_step(uint16_t pot_sample);
 
 static void gpio_init(void) {
     // GPIO3 queda como salida controlada por LEDC (sin pulls, función GPIO)
@@ -128,13 +139,13 @@ static void gpio_init(void) {
     reg &= ~(IO_MUX_FUN_IE | IO_MUX_FUN_PU | IO_MUX_FUN_PD | IO_MUX_MCU_SEL_MASK);
     reg |= (IO_MUX_MCU_SEL_GPIO << 12);
     REG32(IO_MUX_GPIO3_REG) = reg;
-    REG32(GPIO_ENABLE_W1TS_REG) = LED_MASK;
+    REG32(GPIO_ENABLE_W1TS_REG) = FAN_PWM_MASK;
 
     reg = REG32(DR_REG_IO_MUX_BASE + 0x0018);      // IO_MUX_GPIO5_REG (MTDI)
     reg &= ~(IO_MUX_FUN_IE | IO_MUX_FUN_PU | IO_MUX_FUN_PD | IO_MUX_MCU_SEL_MASK);
     reg |= (IO_MUX_MCU_SEL_GPIO << 12);
     REG32(DR_REG_IO_MUX_BASE + 0x0018) = reg;
-    REG32(GPIO_ENABLE_W1TS_REG) = LED2_MASK;
+    REG32(GPIO_ENABLE_W1TS_REG) = STATUS_LED_MASK;
 
     // GPIO0 en modo analógico (sin OE ni pulls) para el potenciómetro
     reg = REG32(IO_MUX_GPIO0_REG);
@@ -254,6 +265,51 @@ static void ledc_set_duty(uint32_t duty) {
     REG32(LEDC_LSCH0_CONF0_REG) |= LEDC_PARA_UP_LSCH0;
 }
 
+static void status_led_set(int on) {
+    if (on) {
+        REG32(GPIO_OUT_W1TS_REG) = STATUS_LED_MASK;
+    } else {
+        REG32(GPIO_OUT_W1TC_REG) = STATUS_LED_MASK;
+    }
+}
+
+static void fan_control_step(uint16_t pot_sample) {
+    static fan_state_t state = FAN_STATE_IDLE;
+
+    switch (state) {
+    case FAN_STATE_IDLE:
+        if (pot_sample > FAN_HYST_ON) {
+            state = FAN_STATE_MANUAL;
+        }
+        break;
+    case FAN_STATE_MANUAL:
+        if (pot_sample < FAN_HYST_OFF) {
+            state = FAN_STATE_IDLE;
+        }
+        break;
+    default:
+        state = FAN_STATE_IDLE;
+        break;
+    }
+
+    if (state == FAN_STATE_IDLE) {
+        ledc_set_duty(0);
+        status_led_set(0);
+        return;
+    }
+
+    uint32_t pwm_input = (pot_sample > ADC_ZERO_BIAS) ? (pot_sample - ADC_ZERO_BIAS) : 0U;
+    uint32_t pwm_range = (ADC_MAX_VALUE > ADC_ZERO_BIAS) ? (ADC_MAX_VALUE - ADC_ZERO_BIAS) : 1U;
+    uint32_t duty = (pwm_input * LEDC_DUTY_MAX) / pwm_range;
+
+    if (duty > 0 && duty < FAN_MIN_DUTY) {
+        duty = FAN_MIN_DUTY;
+    }
+
+    ledc_set_duty(duty);
+    status_led_set(duty > 0);
+}
+
 int main(void) {
     // Deshabilitar watchdogs para bucle infinito didáctico
     disable_timg_wdt(TIMG0_BASE);
@@ -265,20 +321,10 @@ int main(void) {
     adc_init();
     ledc_init();
 
-    // Loop principal: LED rojo por umbral digital, LED azul via PWM proporcional
+    // Loop principal: control manual del cooler mediante potenciómetro
     while (1) {
         uint16_t sample = adc_sample_once();
-        if (sample >= ADC_THRESHOLD) {
-            REG32(GPIO_OUT_W1TS_REG) = LED2_MASK;
-        } else {
-            REG32(GPIO_OUT_W1TC_REG) = LED2_MASK;
-        }
-
-        uint32_t pwm_input = (sample > ADC_ZERO_BIAS) ? (sample - ADC_ZERO_BIAS) : 0U;
-        uint32_t pwm_range = 4095U - ADC_ZERO_BIAS;
-        uint32_t duty = (pwm_input * LEDC_DUTY_MAX) / pwm_range;
-        ledc_set_duty(duty);
-
+        fan_control_step(sample);
         short_delay();
     }
 }
