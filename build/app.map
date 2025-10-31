@@ -15,31 +15,31 @@ LOAD build/startup.o
 LOAD build/main.o
                 0x3fce0000                        PROVIDE (_stack_top = (ORIGIN (DRAM) + LENGTH (DRAM)))
 
-.text           0x42000000      0x1a8
+.text           0x42000000      0x260
                 0x42000000                        _stext = .
  *(.init)
  .init          0x42000000       0x5e build/startup.o
                 0x42000000                _start
  *(.text*)
  .text          0x4200005e        0x0 build/startup.o
- .text          0x4200005e        0x0 build/main.o
- .text.startup  0x4200005e      0x148 build/main.o
-                0x4200005e                main
-                0x420001a8                        . = ALIGN (0x4)
- *fill*         0x420001a6        0x2 
-                0x420001a8                        _etext = .
+ .text          0x4200005e       0x44 build/main.o
+ .text.startup  0x420000a2      0x1bc build/main.o
+                0x420000a2                main
+                0x42000260                        . = ALIGN (0x4)
+ *fill*         0x4200025e        0x2 
+                0x42000260                        _etext = .
 
-.rela.dyn       0x420001a8        0x0
- .rela.init     0x420001a8        0x0 build/startup.o
+.rela.dyn       0x42000260        0x0
+ .rela.init     0x42000260        0x0 build/startup.o
 
-.rodata         0x3c000000        0x0 load address 0x420001a8
+.rodata         0x3c000000        0x0 load address 0x42000260
                 0x3c000000                        . = ALIGN (0x4)
                 0x3c000000                        _srodata = .
  *(.rodata*)
                 0x3c000000                        . = ALIGN (0x4)
                 0x3c000000                        _erodata = .
 
-.data           0x3fc80000        0x0 load address 0x420001a8
+.data           0x3fc80000        0x0 load address 0x42000260
                 0x3fc80000                        . = ALIGN (0x4)
                 0x3fc80000                        _sdata = .
  *(.data*)
@@ -47,9 +47,9 @@ LOAD build/main.o
  .data          0x3fc80000        0x0 build/main.o
                 0x3fc80000                        . = ALIGN (0x4)
                 0x3fc80000                        _edata = .
-                0x420001a8                        PROVIDE (_sidata = LOADADDR (.data))
+                0x42000260                        PROVIDE (_sidata = LOADADDR (.data))
 
-.bss            0x3fc80000        0x0 load address 0x420001a8
+.bss            0x3fc80000        0x0 load address 0x42000260
                 0x3fc80000                        . = ALIGN (0x8)
                 0x3fc80000                        _sbss = .
  *(.bss*)
