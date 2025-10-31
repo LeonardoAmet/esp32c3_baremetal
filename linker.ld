@@ -29,7 +29,7 @@ MEMORY
   /* Ventana XIP para rodata accesible por bus de datos. */
   DROM (rx)  : ORIGIN = 0x3C000000, LENGTH = 512K
   /* DRAM interna para .data/.bss/stack. */
-  DRAM (rwx) : ORIGIN = 0x3FC80000, LENGTH = 400K
+  DRAM (rwx) : ORIGIN = 0x3FC80000, LENGTH = 384K
 }
  
 /* Externally visible symbols */
